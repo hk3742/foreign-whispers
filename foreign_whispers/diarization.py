@@ -9,9 +9,8 @@ and providing an HF token.  Returns empty list with a warning if the dep is
 absent or the token is missing.
 """
 import logging
- 
+
 logger = logging.getLogger(__name__)
- 
  
 def diarize_audio(audio_path: str, hf_token: str | None = None) -> list[dict]:
     """Return speaker-labeled intervals for *audio_path*.

@@ -22,8 +22,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 # Install dependencies as root, then hand ownership to appuser
 WORKDIR /app
 COPY --chown=$USERNAME:$USERNAME pyproject.toml uv.lock ./
+COPY patch_pyannote.py /tmp/patch_pyannote.py
 RUN --mount=type=cache,target=/root/.cache/uv \
-    UV_TORCH_BACKEND=cpu uv sync --frozen --no-dev --no-install-project && \
+    UV_TORCH_BACKEND=cpu UV_TORCH_INDEX=https://download.pytorch.org/whl/cpu uv sync --frozen --no-dev --no-install-project --group alignment && \
+    python3 /tmp/patch_pyannote.py && \
     chown -R $USERNAME:$USERNAME /app
 
 COPY --chown=$USERNAME:$USERNAME . .
