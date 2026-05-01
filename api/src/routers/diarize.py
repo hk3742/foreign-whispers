@@ -48,7 +48,7 @@ async def diarize_endpoint(video_id: str):
     audio_path = diar_dir / f"{title}.wav"
     subprocess.run(
         ["ffmpeg", "-i", str(video_path), "-vn", "-acodec", "pcm_s16le",
-         "-ar", "16000", "-y", str(audio_path)],
+         "-ar", "16000", "-ac", "1", "-y", str(audio_path)],
         check=True,
         capture_output=True,
     )
