@@ -34,11 +34,22 @@ def _count_syllables(text: str) -> int:
 
 
 _SYLLABLE_RATE = 4.5  # syllables per second for Romance languages
-
+_PAUSE_COMMA   = 0.12  # seconds per comma
+_PAUSE_PERIOD  = 0.18  # seconds per sentence-ending punctuation
+_PAUSE_ELLIP   = 0.25  # seconds per ellipsis
 
 def _estimate_duration(text: str) -> float:
-    """Estimate TTS duration in seconds using a syllable-rate heuristic."""
-    return _count_syllables(text) / _SYLLABLE_RATE
+    """Estimate TTS duration in seconds using syllable rate + punctuation pauses."""
+    syllables = _count_syllables(text)
+    speech_s  = syllables / _SYLLABLE_RATE
+
+    # Add pause time for punctuation (TTS engines insert natural pauses)
+    pauses  = text.count(",")  * _PAUSE_COMMA
+    pauses += len(re.findall(r"[.!?¿¡]", text)) * _PAUSE_PERIOD
+    pauses += text.count("…")  * _PAUSE_ELLIP
+    pauses += text.count("...") * _PAUSE_ELLIP
+
+    return speech_s + pauses
 
 
 @dataclasses.dataclass
@@ -295,6 +306,135 @@ def global_align(
             stretch_factor  = stretch,
         ))
 
+        cumulative_drift += gap_shift
+
+    return aligned
+
+def global_align_dp(
+    metrics:         list[SegmentMetrics],
+    silence_regions: list[dict],
+    max_stretch:     float = 1.4,
+) -> list[AlignedSegment]:
+    """DP global alignment minimising total squared stretch penalty.
+
+    Improves on the greedy ``global_align`` by looking ahead: instead of
+    making the locally optimal decision for each segment independently, it
+    finds the assignment of gap-shifts that minimises the sum of squared
+    stretch factors across all segments — subject to the constraint that
+    each gap-shift can only consume silence that actually exists after that
+    segment.
+
+    With no silence regions available, produces identical output to
+    ``global_align``. The advantage appears when real VAD silence data
+    is provided: the DP saves gaps for segments that need them most
+    rather than consuming them greedily left-to-right.
+
+    Args:
+        metrics: Per-segment timing metrics from ``compute_segment_metrics``.
+        silence_regions: VAD output dicts with ``{"start_s", "end_s", "label"}``.
+            Pass ``[]`` if VAD is unavailable.
+        max_stretch: Upper bound for ``MILD_STRETCH`` speed factor.
+
+    Returns:
+        One ``AlignedSegment`` per input metric, in order.
+    """
+    import math
+
+    def _silence_after(end_s: float) -> float:
+        for r in silence_regions:
+            if r.get("label") == "silence" and r["start_s"] >= end_s - 0.1:
+                return r["end_s"] - r["start_s"]
+        return 0.0
+
+    n = len(metrics)
+    if n == 0:
+        return []
+
+    # Quantise drift to 0.1s steps; cap state space at 300 steps (30s max drift)
+    STEP = 0.1
+    max_drift_steps = min(
+        int(sum(m.overflow_s for m in metrics if m.overflow_s > 0) / STEP) + 1,
+        300,
+    )
+    INF = math.inf
+
+    # dp[d] = min total squared-stretch cost arriving at this segment with drift = d*STEP
+    dp_cur = [INF] * (max_drift_steps + 1)
+    dp_cur[0] = 0.0
+
+    # choice[i][d] = True if we took a gap-shift at segment i arriving with drift d
+    choice: list[list[bool]] = [
+        [False] * (max_drift_steps + 1) for _ in range(n)
+    ]
+
+    for i, m in enumerate(metrics):
+        dp_next   = [INF] * (max_drift_steps + 1)
+        gap_s     = _silence_after(m.source_end)
+        gap_steps = int(m.overflow_s / STEP) if m.overflow_s > 0 else 0
+        sf        = min(m.predicted_stretch, max_stretch)
+        no_gap_cost = max(0.0, sf - 1.0) ** 2  # 0 when segment fits naturally
+
+        for d in range(max_drift_steps + 1):
+            if dp_cur[d] == INF:
+                continue
+
+            # Option A: no gap-shift — pay stretch cost, drift unchanged
+            cost_a = dp_cur[d] + no_gap_cost
+            if cost_a < dp_next[d]:
+                dp_next[d] = cost_a
+                choice[i][d] = False
+
+            # Option B: gap-shift — zero stretch cost, drift increases
+            if gap_s >= m.overflow_s and m.overflow_s > 0:
+                new_d = d + gap_steps
+                if new_d <= max_drift_steps:
+                    cost_b = dp_cur[d]   # no stretch penalty
+                    if cost_b < dp_next[new_d]:
+                        dp_next[new_d] = cost_b
+                        choice[i][d] = True
+
+        dp_cur = dp_next
+
+    # Reconstruct decisions by replaying forward through the choice table
+    use_gap = [False] * n
+    d_state = 0
+    for i, m in enumerate(metrics):
+        took_gap   = choice[i][d_state]
+        use_gap[i] = took_gap
+        if took_gap:
+            d_state = min(d_state + int(m.overflow_s / STEP), max_drift_steps)
+
+    # Build AlignedSegment list
+    aligned:          list[AlignedSegment] = []
+    cumulative_drift: float                = 0.0
+
+    for i, m in enumerate(metrics):
+        gap_s = _silence_after(m.source_end)
+
+        if use_gap[i] and gap_s >= m.overflow_s and m.overflow_s > 0:
+            action    = AlignAction.GAP_SHIFT
+            gap_shift = m.overflow_s
+            stretch   = 1.0
+        else:
+            gap_shift = 0.0
+            action    = decide_action(m, available_gap_s=0.0)
+            stretch   = min(m.predicted_stretch, max_stretch) \
+                        if action == AlignAction.MILD_STRETCH else 1.0
+
+        sched_start = m.source_start + cumulative_drift
+        sched_end   = sched_start + m.source_duration_s + gap_shift
+
+        aligned.append(AlignedSegment(
+            index           = i,
+            original_start  = m.source_start,
+            original_end    = m.source_end,
+            scheduled_start = sched_start,
+            scheduled_end   = sched_end,
+            text            = m.translated_text,
+            action          = action,
+            gap_shift_s     = gap_shift,
+            stretch_factor  = stretch,
+        ))
         cumulative_drift += gap_shift
 
     return aligned
