@@ -57,8 +57,14 @@ async def tts_endpoint(
 
     source_path = str(trans_dir / f"{title}.json")
 
+    # Build speaker-to-voice map if diarization was run
+    trans_data = json.loads(pathlib.Path(source_path).read_text())
+    speakers = list({s.get("speaker", "") for s in trans_data.get("segments", []) if s.get("speaker")})
+    speaker_voice_map = svc.build_speaker_voice_map(speakers, lang="es") if speakers else {}
+
     await _run_in_threadpool(
-        None, svc.text_file_to_speech, source_path, str(audio_dir), alignment=alignment
+        None, svc.text_file_to_speech, source_path, str(audio_dir),
+        alignment=alignment, speaker_voice_map=speaker_voice_map
     )
 
     return {
