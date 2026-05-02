@@ -27,12 +27,16 @@ async def tts_endpoint(
     request: Request,
     config: str = Query(..., pattern=r"^c-[0-9a-f]{7}$"),
     alignment: bool = Query(False),
+    speaker_wav: str = Query(None, description="Reference voice WAV path (e.g. 'es/default.wav')"),
 ):
     """Generate TTS audio for a translated transcript.
 
     *config* is an opaque directory name for caching.
     *alignment* enables temporal alignment (clamped stretch).
+    *speaker_wav* overrides the reference voice for all segments.
     """
+    from foreign_whispers.voice_resolution import resolve_speaker_wav
+
     trans_dir = settings.translations_dir
     audio_dir = settings.tts_audio_dir / config
     audio_dir.mkdir(parents=True, exist_ok=True)
@@ -60,7 +64,13 @@ async def tts_endpoint(
     # Build speaker-to-voice map if diarization was run
     trans_data = json.loads(pathlib.Path(source_path).read_text())
     speakers = list({s.get("speaker", "") for s in trans_data.get("segments", []) if s.get("speaker")})
-    speaker_voice_map = svc.build_speaker_voice_map(speakers, lang="es") if speakers else {}
+    if speakers:
+        speaker_voice_map = svc.build_speaker_voice_map(speakers, lang="es")
+    elif speaker_wav is not None:
+        speaker_voice_map = {"": speaker_wav}
+    else:
+        default_wav = resolve_speaker_wav(settings.speakers_dir, "es")
+        speaker_voice_map = {"": default_wav}
 
     await _run_in_threadpool(
         None, svc.text_file_to_speech, source_path, str(audio_dir),
@@ -89,3 +99,5 @@ async def get_audio(
         raise HTTPException(status_code=404, detail="Audio file not found")
 
     return FileResponse(str(audio_path), media_type="audio/wav")
+
+

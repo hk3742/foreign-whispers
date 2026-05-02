@@ -20,7 +20,8 @@ class TTSService:
         Looks for WAV files in pipeline_data/speakers/{lang}/.
         Returns empty dict if no WAVs are found (falls back to default voice).
         """
-        speakers_dir = self.ui_dir / "speakers" / lang
+        from api.src.core.config import settings
+        speakers_dir = settings.speakers_dir / lang
         if not speakers_dir.exists():
             return {}
         wavs = sorted(speakers_dir.glob("*.wav"))
