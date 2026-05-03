@@ -43,12 +43,13 @@ async def diarize_endpoint(video_id: str):
             skipped=True,
         )
 
+    # ---- YOUR CODE HERE ----
     # Step 1: Extract audio from video
     video_path = settings.videos_dir / f"{title}.mp4"
     audio_path = diar_dir / f"{title}.wav"
     subprocess.run(
         ["ffmpeg", "-i", str(video_path), "-vn", "-acodec", "pcm_s16le",
-         "-ar", "16000", "-ac", "1", "-y", str(audio_path)],
+         "-ar", "16000", "-y", str(audio_path)],
         check=True,
         capture_output=True,
     )
@@ -63,7 +64,7 @@ async def diarize_endpoint(video_id: str):
     result = {"speakers": speakers, "segments": diar_segments}
     diar_path.write_text(json.dumps(result))
 
-    # Merge speaker labels into transcription JSON
+    # Merge speaker labels into transcription and translation JSONs
     from foreign_whispers.diarization import assign_speakers
     transcript_path = settings.transcriptions_dir / f"{title}.json"
     if transcript_path.exists():
@@ -72,5 +73,13 @@ async def diarize_endpoint(video_id: str):
         transcript["segments"] = labeled_segments
         transcript_path.write_text(json.dumps(transcript))
 
+    translation_path = settings.translations_dir / f"{title}.json"
+    if translation_path.exists():
+        translation = json.loads(translation_path.read_text())
+        labeled_segments = assign_speakers(translation.get("segments", []), diar_segments)
+        translation["segments"] = labeled_segments
+        translation_path.write_text(json.dumps(translation))
+
     # Step 5: Return DiarizeResponse
     return DiarizeResponse(video_id=video_id, speakers=speakers, segments=diar_segments)
+    # ---- END YOUR CODE ----

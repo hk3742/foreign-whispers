@@ -61,8 +61,21 @@ async def tts_endpoint(
 
     source_path = str(trans_dir / f"{title}.json")
 
-    # Build speaker-to-voice map if diarization was run
+    # Merge speaker labels from diarization into translation segments (if available)
     trans_data = json.loads(pathlib.Path(source_path).read_text())
+    diar_path = settings.diarizations_dir / f"{title}.json"
+    if diar_path.exists():
+        diar_segs = json.loads(diar_path.read_text()).get("segments", [])
+        for seg in trans_data.get("segments", []):
+            best, best_overlap = None, 0.0
+            for d in diar_segs:
+                overlap = min(seg["end"], d["end_s"]) - max(seg["start"], d["start_s"])
+                if overlap > best_overlap:
+                    best_overlap, best = overlap, d["speaker"]
+            if best:
+                seg["speaker"] = best
+
+    # Build speaker-to-voice map if diarization was run
     speakers = list({s.get("speaker", "") for s in trans_data.get("segments", []) if s.get("speaker")})
     if speakers:
         speaker_voice_map = svc.build_speaker_voice_map(speakers, lang="es")
