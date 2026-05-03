@@ -30,9 +30,12 @@ def resolve_speaker_wav(
     """
     # ---- YOUR CODE HERE ----
     if speaker_id:
-        candidate = speakers_dir / target_language / f"{speaker_id}.wav"
-        if candidate.exists():
-            return f"{target_language}/{speaker_id}.wav"
+        # Normalize "SPEAKER_00" → "speaker00" to match filename convention
+        normalized = speaker_id.replace("SPEAKER_", "speaker").lower()
+        for name in (speaker_id, normalized):
+            candidate = speakers_dir / target_language / f"{name}.wav"
+            if candidate.exists():
+                return f"{target_language}/{name}.wav"
 
     lang_default = speakers_dir / target_language / "default.wav"
     if lang_default.exists():

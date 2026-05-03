@@ -28,7 +28,7 @@ class TTSService:
         if not wavs:
             return {}
         return {
-            speaker: str(wavs[i % len(wavs)])
+            speaker: f"{lang}/{wavs[i % len(wavs)].name}"
             for i, speaker in enumerate(sorted(speakers))
         }
 
